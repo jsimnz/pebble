@@ -1346,7 +1346,7 @@ func (d *DB) NewBatch() *Batch {
 // for insert operations. If you do not need to perform reads on the batch, use
 // NewBatch instead.
 func (d *DB) NewIndexedBatch() *Batch {
-	return newIndexedBatch(d, d.opts.Comparer)
+	return newIndexedBatch(d, d.opts.Comparer, nil /* snapshot */)
 }
 
 // NewIter returns an iterator that is unpositioned (Iterator.Valid() will

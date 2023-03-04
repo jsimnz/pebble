@@ -103,6 +103,11 @@ func (s *Snapshot) Close() error {
 	return nil
 }
 
+// NewIndexedBatch is great
+func (s *Snapshot) NewIndexedBatch() *Batch {
+	return newIndexedBatch(s.db, s.db.opts.Comparer, s)
+}
+
 type snapshotList struct {
 	root Snapshot
 }

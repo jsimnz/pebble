@@ -239,7 +239,7 @@ func TestBatchEmpty(t *testing.T) {
 	})
 	require.NoError(t, err)
 	defer d.Close()
-	ib := newIndexedBatch(d, DefaultComparer)
+	ib := newIndexedBatch(d, DefaultComparer, nil)
 	iter := ib.NewIter(nil)
 	require.False(t, iter.First())
 	iter2, err := iter.Clone(CloneOptions{})
@@ -364,7 +364,7 @@ func TestIndexedBatchReset(t *testing.T) {
 	})
 	require.NoError(t, err)
 	defer db.Close()
-	b := newIndexedBatch(db, DefaultComparer)
+	b := newIndexedBatch(db, DefaultComparer, nil)
 	start := "start-key"
 	end := "end-key"
 	key := "test-key"
@@ -445,7 +445,7 @@ func TestIndexedBatchMutation(t *testing.T) {
 	require.NoError(t, err)
 	defer func() { d.Close() }()
 
-	b := newIndexedBatch(d, DefaultComparer)
+	b := newIndexedBatch(d, DefaultComparer, nil)
 	iters := map[string]*Iterator{}
 	defer func() {
 		for _, iter := range iters {
@@ -480,7 +480,7 @@ func TestIndexedBatchMutation(t *testing.T) {
 			if b != nil {
 				require.NoError(t, b.Close())
 			}
-			b = newIndexedBatch(d, opts.Comparer)
+			b = newIndexedBatch(d, opts.Comparer, nil)
 			if err := runBatchDefineCmd(td, b); err != nil {
 				return err.Error()
 			}
@@ -548,7 +548,7 @@ func TestIndexedBatch_GlobalVisibility(t *testing.T) {
 	require.NoError(t, d.Set([]byte("foo"), []byte("foo"), nil))
 
 	// Create an iterator over an empty indexed batch.
-	b := newIndexedBatch(d, DefaultComparer)
+	b := newIndexedBatch(d, DefaultComparer, nil)
 	iterOpts := IterOptions{KeyTypes: IterKeyTypePointsAndRanges}
 	iter := b.NewIter(&iterOpts)
 	defer iter.Close()
@@ -791,7 +791,7 @@ func TestBatchIter(t *testing.T) {
 					case "define":
 						switch method {
 						case "build":
-							b = newIndexedBatch(nil, DefaultComparer)
+							b = newIndexedBatch(nil, DefaultComparer, nil)
 						case "apply":
 							b = newBatch(nil)
 						}
@@ -805,7 +805,7 @@ func TestBatchIter(t *testing.T) {
 
 						switch method {
 						case "apply":
-							tmp := newIndexedBatch(nil, DefaultComparer)
+							tmp := newIndexedBatch(nil, DefaultComparer, nil)
 							tmp.Apply(b, nil)
 							b = tmp
 						}
@@ -855,7 +855,7 @@ func TestBatchRangeOps(t *testing.T) {
 
 		case "apply":
 			if b == nil {
-				b = newIndexedBatch(nil, DefaultComparer)
+				b = newIndexedBatch(nil, DefaultComparer, nil)
 			}
 			t := newBatch(nil)
 			if err := runBatchDefineCmd(td, t); err != nil {
@@ -868,7 +868,7 @@ func TestBatchRangeOps(t *testing.T) {
 
 		case "define":
 			if b == nil {
-				b = newIndexedBatch(nil, DefaultComparer)
+				b = newIndexedBatch(nil, DefaultComparer, nil)
 			}
 			if err := runBatchDefineCmd(td, b); err != nil {
 				return err.Error()
@@ -1174,7 +1174,7 @@ func BenchmarkIndexedBatchSet(b *testing.B) {
 		value[i] = byte(i)
 	}
 	key := make([]byte, 8)
-	batch := newIndexedBatch(nil, DefaultComparer)
+	batch := newIndexedBatch(nil, DefaultComparer, nil)
 
 	b.ResetTimer()
 
@@ -1233,7 +1233,7 @@ func BenchmarkIndexedBatchSetDeferred(b *testing.B) {
 		value[i] = byte(i)
 	}
 	key := make([]byte, 8)
-	batch := newIndexedBatch(nil, DefaultComparer)
+	batch := newIndexedBatch(nil, DefaultComparer, nil)
 
 	b.ResetTimer()
 
@@ -1377,4 +1377,113 @@ func TestBatchSpanCaching(t *testing.T) {
 			iters[readKey] = append(iters[readKey], iter)
 		}
 	}
+}
+
+func TestBatchSnapshot(t *testing.T) {
+	d, err := Open("", &Options{
+		FS: vfs.NewMem(),
+	})
+	require.NoError(t, err)
+	defer d.Close()
+
+	// mutate db state before creating snapshot
+	require.NoError(t, d.Set([]byte("foo"), []byte("foo"), nil))
+
+	// key := "test-key"
+	// value := "test-value"
+	b := d.NewIndexedBatch()
+	// check value of db state
+	val, closer, err := d.Get([]byte("foo"))
+	require.NoError(t, err)
+	require.Equal(t, "foo", string(val))
+	closer.Close()
+
+	// verify batch has same state
+	val, closer, err = b.Get([]byte("foo"))
+	require.NoError(t, err)
+	require.Equal(t, "foo", string(val))
+	closer.Close()
+
+	// mutate DB state now that we have started a batch
+	require.NoError(t, d.Set([]byte("foo"), []byte("bar"), nil))
+
+	// check what Batch view is
+	val, closer, err = d.Get([]byte("foo"))
+	require.NoError(t, err)
+	require.Equal(t, "bar", string(val))
+	closer.Close()
+
+	b.Close()
+
+	// new snapshot indexed batch
+	snapshot := d.NewSnapshot()
+	sb := snapshot.NewIndexedBatch()
+
+	// verify batch view is the same as current db
+	// and open snapshot
+	val, closer, err = d.Get([]byte("foo"))
+	require.NoError(t, err)
+	require.Equal(t, "bar", string(val))
+	closer.Close()
+
+	val, closer, err = snapshot.Get([]byte("foo"))
+	require.NoError(t, err)
+	require.Equal(t, "bar", string(val))
+	closer.Close()
+
+	val, closer, err = sb.Get([]byte("foo"))
+	require.NoError(t, err)
+	require.Equal(t, "bar", string(val))
+	closer.Close()
+
+	// mutate db state
+	// mutate DB state now that we have started a batch
+	require.NoError(t, d.Set([]byte("foo"), []byte("baz"), nil))
+
+	// verify both snapshot and batch see the old state
+	val, closer, err = snapshot.Get([]byte("foo"))
+	require.NoError(t, err)
+	require.Equal(t, "bar", string(val))
+	closer.Close()
+
+	val, closer, err = sb.Get([]byte("foo"))
+	require.NoError(t, err)
+	require.Equal(t, "bar", string(val))
+	closer.Close()
+
+	// lets mutate the snapshot batched index
+	// and verify the snapshot and db don't see the update
+	require.NoError(t, sb.Set([]byte("foo"), []byte("bang"), nil))
+
+	val, closer, err = snapshot.Get([]byte("foo"))
+	require.NoError(t, err)
+	require.Equal(t, "bar", string(val))
+	closer.Close()
+
+	val, closer, err = d.Get([]byte("foo"))
+	require.NoError(t, err)
+	require.Equal(t, "baz", string(val))
+	closer.Close()
+
+	// Commit batch and verify the db updates
+	// but the snapshot is still consistent
+	require.NoError(t, sb.Commit(nil))
+
+	val, closer, err = d.Get([]byte("foo"))
+	require.NoError(t, err)
+	require.Equal(t, "bang", string(val))
+	closer.Close()
+
+	val, closer, err = snapshot.Get([]byte("foo"))
+	require.NoError(t, err)
+	require.Equal(t, "bar", string(val))
+	closer.Close()
+
+	// finally close snapshot
+	require.NoError(t, snapshot.Close())
+	// require.NoError(t, d.Close())
+}
+
+func TestBatchMutationAfterSnapshotClose(t *testing.T) {
+
 }

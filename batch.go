@@ -216,6 +216,10 @@ type Batch struct {
 	// nil once it has been set implies that the Batch has encountered an error.
 	db *DB
 
+	// The optional snapshot an indexed batch will read from. Will be nil by default
+	// unless created by snapshot.NewIndexedBatch().
+	snapshot *Snapshot
+
 	// The count of records in the batch. This count will be stored in the batch
 	// data whenever Repr() is called.
 	count uint64
@@ -310,12 +314,13 @@ func newBatch(db *DB) *Batch {
 	return b
 }
 
-func newIndexedBatch(db *DB, comparer *Comparer) *Batch {
+func newIndexedBatch(db *DB, comparer *Comparer, s *Snapshot) *Batch {
 	i := indexedBatchPool.Get().(*indexedBatch)
 	i.batch.cmp = comparer.Compare
 	i.batch.formatKey = comparer.FormatKey
 	i.batch.abbreviatedKey = comparer.AbbreviatedKey
 	i.batch.db = db
+	i.batch.snapshot = s
 	i.batch.index = &i.index
 	i.batch.index.Init(&i.batch.data, i.batch.cmp, i.batch.abbreviatedKey)
 	return &i.batch
@@ -466,7 +471,7 @@ func (b *Batch) Get(key []byte) ([]byte, io.Closer, error) {
 	if b.index == nil {
 		return nil, nil, ErrNotIndexed
 	}
-	return b.db.getInternal(key, b, nil /* snapshot */)
+	return b.db.getInternal(key, b, b.snapshot)
 }
 
 func (b *Batch) prepareDeferredKeyValueRecord(keyLen, valueLen int, kind InternalKeyKind) {
@@ -908,7 +913,7 @@ func (b *Batch) NewIterWithContext(ctx context.Context, o *IterOptions) *Iterato
 	if b.index == nil {
 		return &Iterator{err: ErrNotIndexed}
 	}
-	return b.db.newIter(ctx, b, nil /* snapshot */, o)
+	return b.db.newIter(ctx, b, b.snapshot /* snapshot */, o)
 }
 
 // newInternalIter creates a new internalIterator that iterates over the
